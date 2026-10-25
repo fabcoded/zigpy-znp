@@ -856,6 +856,60 @@ RFD = c.util.NodeRelation.CHILD_RFD
 
 
 @pytest.mark.parametrize("device_cls", [FormedLaunchpadCC26X2R1])
+async def test_request_recovery_assoc_other_address(
+    device_cls, make_application, mocker
+):
+    # The firmware holds the device as a child at an address other than device.nwk:
+    # dropping it cannot help, and the entry must survive
+    app, znp_server = make_application(server_cls=device_cls)
+
+    await app.startup(auto_form=False)
+
+    mocker.patch("zigpy_znp.zigbee.application.DATA_CONFIRM_TIMEOUT", new=0.1)
+    app._znp._config[conf.CONF_ZNP_CONFIG][conf.CONF_ARSP_TIMEOUT] = 1
+
+    device = app.add_initialized_device(ieee=t.EUI64(range(8)), nwk=0xABCD)
+    entry = znp_server.assoc_add_new(nwk=0x1234, ieee=device.ieee, node_relation=RFD)
+
+    did_assoc_remove = mocker.spy(znp_server, "assoc_remove")
+    did_assoc_add = mocker.spy(znp_server, "assoc_add_new")
+
+    data_req = znp_server.reply_to(
+        c.AF.DataRequestExt.Req(partial=True),
+        responses=[
+            c.AF.DataRequestExt.Rsp(Status=t.Status.SUCCESS),
+            c.AF.DataConfirm.Callback(
+                Status=t.Status.MAC_TRANSACTION_EXPIRED, Endpoint=1, TSN=1
+            ),
+        ],
+    )
+
+    was_route_discovered = znp_server.reply_to(
+        c.ZDO.ExtRouteDisc.Req(Dst=device.nwk, partial=True),
+        responses=[c.ZDO.ExtRouteDisc.Rsp(Status=t.Status.SUCCESS)],
+    )
+
+    with pytest.raises(DeliveryError):
+        await app.request(
+            device=device,
+            profile=260,
+            cluster=1,
+            src_ep=1,
+            dst_ep=1,
+            sequence=1,
+            data=b"\x00",
+        )
+
+    assert data_req.call_count == 2
+    assert was_route_discovered.call_count == 1
+    assert did_assoc_remove.call_count == 0
+    assert did_assoc_add.call_count == 0
+    assert znp_server.assoc_get(ieee=device.ieee) is entry
+
+    await app.shutdown()
+
+
+@pytest.mark.parametrize("device_cls", [FormedLaunchpadCC26X2R1])
 @pytest.mark.parametrize(
     ("scenario", "relation", "restored"),
     [

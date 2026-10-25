@@ -970,10 +970,10 @@ class ControllerApplication(zigpy.application.ControllerApplication):
                             ):
                                 raise
 
-                            # Not a direct child, or a miss (0xFFFE, see
-                            # Koenkk/zigbee-herdsman#685): retry only
+                            # Not a direct child, or not at device.nwk (a miss reads
+                            # 0xFFFE, see Koenkk/zigbee-herdsman#685): retry only
                             if (
-                                child_association.Device.shortAddr == 0xFFFE
+                                child_association.Device.shortAddr != device.nwk
                                 or child_association.Device.nodeRelation
                                 not in CHILD_NODE_RELATIONS
                             ):
